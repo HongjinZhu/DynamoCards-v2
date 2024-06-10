@@ -137,3 +137,4 @@ backend/__pycache__/
 _text-to-json.py
 tasks.txt
 ai-data.json
+authentication.json
