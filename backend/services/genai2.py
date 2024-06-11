@@ -6,6 +6,7 @@ from vertexai.generative_models import GenerativeModel
 from langchain.prompts import PromptTemplate
 import logging
 from tqdm import tqdm
+import json
 
 # configure log
 logging.basicConfig(level=logging.INFO)
@@ -64,13 +65,33 @@ class YoutubeProcessor:
 
         return result
     
-    def find_key_concepts(self, documents:list, group_size: int=2, verbose=False):
+    # sample_size cannot be infinitely large
+    # find a number N to optimize the performance
+    def find_key_concepts(self, documents:list, sample_size: int=0, verbose=False):
         # iterate through all documents of group size and find key concepts
-        if group_size > len(documents):
+        if sample_size > len(documents):
             raise ValueError("Group size is larger than the number of documents")
         
+        # optimize sample size given no input
+        if sample_size == 0:
+            sample_size = len(documents) // 5
+            if verbose:
+                logging.info(f"No sample size specified. Setting number of documents per sample as 5. Sample Size: {sample_size}")
+        
         # find number of documents in each group
-        num_docs_per_group = len(documents) // group_size + (len(documents) % group_size > 0)
+        num_docs_per_group = len(documents) // sample_size + (len(documents) % sample_size > 0)
+
+        # check thresholds for response quality
+        if num_docs_per_group > 10:
+            raise ValueError("""
+                            Each group has more than 10 documents and output quality will be degraded significantly. 
+                            Increase the sample_size parameter to reduce the number of documents per group.
+                            """)
+        elif num_docs_per_group > 5:
+            logging.warn("""
+                         Each group has more than 5 documents and output quality is likely to be degraded. 
+                         Consider increasing the sample size.
+                         """)
         
         # split the document in chunks of size num_docs_per_group
         groups = [documents[i:i+num_docs_per_group] for i in range (0, len(documents), num_docs_per_group)]
@@ -90,8 +111,8 @@ class YoutubeProcessor:
                 Find and define key concepts or terms found in the text:
                 {text}
 
-                Respond in the following format as a string separating each concept with a comma:
-                "concept": "definition"
+                Respond in the following format as a JSON object without any backticks separating each concept with a comma:
+                {{"concept": "definition", "concept": "definition", ...}}
                 """,
                 input_variables = ['text']
             )
@@ -119,5 +140,19 @@ class YoutubeProcessor:
                 batch_cost = total_input_cost + total_output_cost
                 logging.info(f"Total group cost: {batch_cost}")
 
-        logging.info(f"Total Analysis Cost: ${batch_cost}")
-        return batch_concepts
+        # convert each JSON string in batch_concepts into a python dictionary
+        processed_concepts = []
+        for concept in batch_concepts:
+            try:
+                # Clean up the concept string
+                concept_cleaned = concept.replace('```json\n', '').replace('\n```', '').strip()
+                # Log the cleaned concept for debugging
+                logger.info(f"Cleaned Concept: {concept_cleaned}")
+                # Attempt to load the JSON
+                processed_concepts.append(json.loads(concept_cleaned))
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to decode JSON: {concept_cleaned}, Error: {str(e)}")
+
+        if verbose:
+            logging.info(f"Total Analysis Cost: ${batch_cost}")
+        return processed_concepts
